@@ -162,6 +162,33 @@
   .area-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:2px 7px;border-radius:99px;color:var(--ac);background:var(--as);margin-right:6px;}
   .toggle-btn.done{border:1px solid var(--verde);background:var(--verde);color:#fff;border-radius:7px;padding:6px 12px;font-size:12.5px;font-weight:600;}
   .pill-late{font-weight:700;color:#fff;background:var(--brand);padding:2px 8px;border-radius:99px;font-size:11px;align-self:flex-start;}
+
+  /* ===== Selector de mes ===== */
+  .mes-bar{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-soft);font-weight:600;}
+  .mes-bar input{border:1px solid var(--line);border-radius:7px;padding:7px 9px;font-size:13px;background:#fff;color:var(--ink);}
+  .mes-bar .link-btn{font-size:12px;}
+
+  /* ===== Marcación: dos columnas ===== */
+  .mc-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;}
+  @media (max-width:900px){ .mc-cols{grid-template-columns:1fr;} }
+  .mc-col{background:#fbfbfc;border:1px solid var(--line-soft);border-radius:var(--radius);padding:12px;}
+  .mc-col-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:2px 4px 12px;}
+  .mc-col-head h3{margin:0;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;}
+  .mc-col-head .dot{width:10px;height:10px;border-radius:99px;}
+  .mc-col-head .count{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:13px;padding:2px 10px;border-radius:99px;}
+  .mc-col.pend .dot{background:var(--ambar);} .mc-col.pend .count{background:var(--ambar-soft);color:var(--ambar);}
+  .mc-col.done .dot{background:var(--verde);} .mc-col.done .count{background:var(--verde-soft);color:var(--verde);}
+  .mc-col .grid-list{margin-bottom:0;}
+  .mc-col .row{padding:12px 14px;}
+  .row.stripe-hecha{border-left-color:var(--verde);}
+  .chip.hecha{background:var(--verde-soft);color:var(--verde);}
+  .chip.mes-ant{background:var(--brand-soft);color:var(--brand);}
+
+  /* ===== Forma de pago ===== */
+  .chip.pago{background:#f1f2f4;color:var(--ink);}
+  .chip.pago-credito{background:var(--azul-soft);color:var(--azul);}
+  .chip.pago-contado{background:var(--verde-soft);color:var(--verde);}
+  .chip.pago-addi{background:var(--cyan-soft);color:var(--cyan);}
 </style>
 </head>
 <body>
@@ -202,7 +229,10 @@
       <div class="cards" id="mc-cards"></div>
       <div class="page-head">
         <div><h2>Solicitudes de marcación</h2><p class="sub">Factura o autorización de obsequio — firmada por Marcela</p></div>
-        <button class="btn brand" id="btn-nueva-mc">+ Nueva solicitud</button>
+        <div class="head-actions">
+          <label class="mes-bar">Mes <input type="month" class="mes-vista"></label>
+          <button class="btn brand" id="btn-nueva-mc">+ Nueva solicitud</button>
+        </div>
       </div>
 
       <div id="mc-form-wrap" style="display:none;">
@@ -248,7 +278,16 @@
         </div>
       </div>
 
-      <div class="grid-list" id="mc-list"></div>
+      <div class="mc-cols">
+        <div class="mc-col pend">
+          <div class="mc-col-head"><h3><span class="dot"></span>Pendientes de marcar</h3><span class="count" id="mc-count-pend">0</span></div>
+          <div class="grid-list" id="mc-list"></div>
+        </div>
+        <div class="mc-col done">
+          <div class="mc-col-head"><h3><span class="dot"></span>Motos marcadas</h3><span class="count" id="mc-count-done">0</span></div>
+          <div class="grid-list" id="mc-list-done"></div>
+        </div>
+      </div>
       <div id="mc-historial-wrap" style="margin-top:14px;"></div>
     </div>
 
@@ -257,7 +296,10 @@
       <div class="cards" id="gps-cards"></div>
       <div class="page-head">
         <div><h2>Instalación de GPS</h2><p class="sub">Facturación y alistamiento van en paralelo; cada etapa se habilita solo cuando se completan las anteriores</p></div>
-        <button class="btn brand" id="btn-nueva-gps">+ Nueva solicitud</button>
+        <div class="head-actions">
+          <label class="mes-bar">Mes <input type="month" class="mes-vista"></label>
+          <button class="btn brand" id="btn-nueva-gps">+ Nueva solicitud</button>
+        </div>
       </div>
 
       <div id="gps-form-wrap" style="display:none;">
@@ -267,6 +309,14 @@
             <div class="field"><label>Fecha</label><input type="date" id="g-fecha"></div>
             <div class="field"><label>Asesor</label><select id="g-asesor"></select></div>
             <div class="field"><label>Cédula del cliente <span style="color:var(--brand);">*</span></label><input type="text" id="g-cedula" placeholder="Obligatorio"></div>
+            <div class="field"><label>Forma de pago <span style="color:var(--brand);">*</span></label>
+              <select id="g-pago">
+                <option value="">Selecciona…</option>
+                <option value="Crédito">Crédito</option>
+                <option value="Contado">Contado</option>
+                <option value="Addi">Addi</option>
+              </select>
+            </div>
             <div class="field"><label>Moto / Modelo</label><select id="g-moto"></select></div>
             <div class="field" id="g-moto-otro-wrap" style="display:none;"><label>Especifica el modelo</label><input type="text" id="g-moto-otro"></div>
             <div class="field"><label>Color</label><select id="g-color"></select></div>
@@ -335,7 +385,34 @@ let guardandoMc = false;
 let guardandoGps = false;
 
 function uid(){ return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+function todayISO(){ // fecha local (Colombia), no UTC — evita que después de las 7 p. m. cuente como el día siguiente
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+/* Mes que se está visualizando: sigue el mes actual automáticamente (se "refresca" solo cada mes)
+   salvo que el usuario elija otro mes en el selector. Los datos NO se borran: quedan en Sheets e informes. */
+let mesElegido = null;
+function mesHoy(){ return todayISO().slice(0,7); }
+function mesVista(){ return mesElegido || mesHoy(); }
+function mesDe(f){ return (f||'').slice(0,7); }
+function nombreMes(ym){
+  const M = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  const [y,m] = (ym||'').split('-'); return m ? M[+m-1]+' '+y : '';
+}
+/* Un pendiente de un mes anterior sigue apareciendo en el mes actual para que no se pierda */
+function enVista(fecha, pendiente){
+  const mv = mesVista(), mf = mesDe(fecha);
+  if(mf===mv) return true;
+  return pendiente && mv===mesHoy() && mf && mf<mv;
+}
+function syncMesInputs(){
+  document.querySelectorAll('.mes-vista').forEach(inp=>{ inp.value = mesVista(); });
+}
+function pagoChip(fp){
+  if(!fp) return '';
+  const cls = {'Crédito':'pago-credito','Contado':'pago-contado','Addi':'pago-addi'}[fp] || '';
+  return `<span class="chip pago ${cls}">💳 ${fp}</span>`;
+}
 function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
@@ -450,6 +527,7 @@ function goto(view){
   document.getElementById('view-'+view).classList.add('active');
   const navBtn = document.querySelector(`.nav button[data-view="${navView}"]`);
   if(navBtn) navBtn.classList.add('active');
+  syncMesInputs();
   if(view==='dashboard') renderDashboard();
   if(view==='marcacion') renderMarcacion();
   if(view==='gps') renderGps();
@@ -494,12 +572,30 @@ function mcRowHTML(r, compact){
         <div class="chips">
           <span class="chip tipo-${r.tipo}">${r.tipo==='obsequio' ? 'Obsequio · autorizó '+(r.autorizadoPor||'—') : 'Factura '+(r.factura||'—')}</span>
           <span class="chip proveedor">Esperando: ZonaMarcas</span>
+          ${mesDe(r.fecha) && mesDe(r.fecha)<mesHoy() ? `<span class="chip mes-ant">Pendiente de ${nombreMes(mesDe(r.fecha))}</span>` : ''}
         </div>
       </div>
       <div class="actions">
         <button class="btn brand sm" data-marcar="${r.id}">Moto marcada</button>
         ${compact ? '' : `<button class="btn ghost sm" data-print="${r.id}">🖨 Remisión</button>`}
         ${compact ? '' : `<button class="btn ghost sm" data-mc-del="${r.id}" style="color:var(--brand);border-color:#f2cac6;">🗑 Eliminar</button>`}
+      </div>
+    </div>`;
+}
+function mcDoneRowHTML(r){
+  return `
+    <div class="row stripe-hecha" data-id="${r.id}">
+      <div>
+        <div class="name">${r.moto||'Moto sin modelo'} ${r.color?('· '+r.color):''}</div>
+        <div class="meta">Vendedor: ${r.vendedor||'—'} &nbsp;·&nbsp; Motor: <span class="mono">${r.motor||'—'}</span></div>
+        <div class="chips">
+          <span class="chip tipo-${r.tipo}">${r.tipo==='obsequio' ? 'Obsequio' : 'Factura '+(r.factura||'—')}</span>
+          <span class="chip hecha">✔ Marcada ${r.fechaMarcada||''}</span>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn ghost sm" data-print="${r.id}">🖨 Remisión</button>
+        <button class="btn ghost sm" data-mc-quitar="${r.id}" style="color:var(--brand);border-color:#f2cac6;" title="La quita de esta columna; sigue en el historial y en el informe">🗑 Quitar</button>
       </div>
     </div>`;
 }
@@ -516,6 +612,17 @@ function bindMcRowEvents(scope){
   scope.querySelectorAll('[data-print]').forEach(btn=>{
     btn.addEventListener('click', ()=>{ printRemision(registros.find(x=>x.id===btn.dataset.print)); });
   });
+  scope.querySelectorAll('[data-mc-quitar]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      askDelete(btn.closest('.actions') || btn.parentElement, async ()=>{
+        const rg = registros.find(x=>x.id===btn.dataset.mcQuitar);
+        if(rg){ rg.archivada = true; rg.fechaArchivada = todayISO(); }
+        await saveRegistros();
+        showToast('Moto quitada de la lista — sigue en el historial y el informe.');
+        refreshCurrentView();
+      }, false, '¿Quitar de la lista de marcadas?', 'Sí, quitar');
+    });
+  });
   scope.querySelectorAll('[data-mc-del]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       askDelete(btn.closest('.actions') || btn.parentElement, async ()=>{
@@ -527,10 +634,10 @@ function bindMcRowEvents(scope){
     });
   });
 }
-function askDelete(box, onYes, dark){
+function askDelete(box, onYes, dark, pregunta, siLabel){
   const c = dark ? '#ff9a9a' : 'var(--brand)';
-  box.innerHTML = `<span style="font-size:12px;color:${c};font-weight:600;">¿Eliminar definitivamente?</span>
-    <button class="btn sm" data-yes style="background:var(--brand);border-color:var(--brand);">Sí, eliminar</button>
+  box.innerHTML = `<span style="font-size:12px;color:${c};font-weight:600;">${pregunta||'¿Eliminar definitivamente?'}</span>
+    <button class="btn sm" data-yes style="background:var(--brand);border-color:var(--brand);">${siLabel||'Sí, eliminar'}</button>
     <button class="btn ghost sm" data-no ${dark?'style="color:#fff;border-color:#4b5563;"':''}>Cancelar</button>`;
   box.querySelector('[data-yes]').addEventListener('click', async (e)=>{ e.stopPropagation(); await onYes(); });
   box.querySelector('[data-no]').addEventListener('click', (e)=>{ e.stopPropagation(); refreshCurrentView(); });
@@ -541,21 +648,31 @@ function refreshCurrentView(){
 }
 
 function renderMarcacion(){
-  const pendientes = registros.filter(r=>!r.marcada);
-  const mesActual = todayISO().slice(0,7);
-  const marcadasMes = registros.filter(r=>r.marcada && (r.fechaMarcada||'').slice(0,7)===mesActual);
-  const obsequiosMes = registros.filter(r=>r.tipo==='obsequio' && (r.fecha||'').slice(0,7)===mesActual);
+  const mv = mesVista();
+  const pendientes = registros.filter(r=>!r.marcada && enVista(r.fecha, true));
+  const marcadasMes = registros.filter(r=>r.marcada && mesDe(r.fechaMarcada||r.fecha)===mv);
+  const marcadasVisibles = marcadasMes.filter(r=>!r.archivada);
+  const obsequiosMes = registros.filter(r=>r.tipo==='obsequio' && mesDe(r.fecha)===mv);
+  const solicitudesMes = registros.filter(r=>mesDe(r.fecha)===mv);
 
   document.getElementById('mc-cards').innerHTML = `
     <div class="card amber"><div class="k">Pendientes</div><div class="v">${pendientes.length}</div><div class="d">esperando a ZonaMarcas</div></div>
-    <div class="card green"><div class="k">Marcadas (mes)</div><div class="v">${marcadasMes.length}</div><div class="d">listas para conciliar pago</div></div>
+    <div class="card green"><div class="k">Marcadas (${nombreMes(mv)})</div><div class="v">${marcadasMes.length}</div><div class="d">listas para conciliar pago</div></div>
     <div class="card red"><div class="k">Obsequios (mes)</div><div class="v">${obsequiosMes.length}</div><div class="d">autorizados por Marcela, sin cobro</div></div>
-    <div class="card blue"><div class="k">Histórico total</div><div class="v">${registros.length}</div><div class="d">todas las solicitudes</div></div>
+    <div class="card blue"><div class="k">Solicitudes del mes</div><div class="v">${solicitudesMes.length}</div><div class="d">registradas en ${nombreMes(mv)}</div></div>
   `;
 
+  document.getElementById('mc-count-pend').textContent = pendientes.length;
+  document.getElementById('mc-count-done').textContent = marcadasVisibles.length;
+
   const list = document.getElementById('mc-list');
-  list.innerHTML = pendientes.length ? pendientes.slice().reverse().map(r=>mcRowHTML(r,false)).join('') : `<div class="empty">No hay solicitudes pendientes. Usa "+ Nueva solicitud" para registrar una.</div>`;
+  list.innerHTML = pendientes.length ? pendientes.slice().reverse().map(r=>mcRowHTML(r,false)).join('') : `<div class="empty">No hay motos pendientes de marcar.</div>`;
   bindMcRowEvents(list);
+
+  const listDone = document.getElementById('mc-list-done');
+  const ordenMarcadas = marcadasVisibles.slice().sort((a,b)=>(b.fechaMarcada||'').localeCompare(a.fechaMarcada||''));
+  listDone.innerHTML = ordenMarcadas.length ? ordenMarcadas.map(r=>mcDoneRowHTML(r)).join('') : `<div class="empty">Aún no hay motos marcadas en ${nombreMes(mv)}.</div>`;
+  bindMcRowEvents(listDone);
   renderHistorial();
 }
 
@@ -879,7 +996,7 @@ function gpsRowHTML(rg){
       <div class="name">${rg.moto||'Moto sin modelo'} ${rg.color?('· '+rg.color):''}</div>
       <div class="meta">Asesor: <b>${rg.asesor||'—'}</b> &nbsp;·&nbsp; Cédula: <span class="mono">${rg.cedula||'—'}</span> &nbsp;·&nbsp; Motor: <span class="mono">${rg.motor||'—'}</span> &nbsp;·&nbsp; ${rg.fecha||''} &nbsp;·&nbsp; ${daysBetween(rg.fecha||todayISO(), todayISO())} día(s) desde el registro</div>
       ${gpsRail(rg)}
-      <div class="chips">${chips}</div>
+      <div class="chips">${pagoChip(rg.formaPago)}${chips}${!done && mesDe(rg.fecha) && mesDe(rg.fecha)<mesHoy() ? `<span class="chip mes-ant">Viene de ${nombreMes(mesDe(rg.fecha))}</span>` : ''}</div>
     </div>
     <div class="prog">${gProgress(rg)}/${GPS_STAGES.length} etapas</div>
     ${gpsBannerHTML(rg)}
@@ -945,6 +1062,7 @@ function renderGpsDetail(){
     <div class="meta">
       <span>Asesor: <b>${rg.asesor||'—'}</b></span>
       <span>Cédula: <b class="mono">${rg.cedula||'—'}</b></span>
+      <span>Forma de pago: <b>${rg.formaPago||'—'}</b></span>
       <span>Motor: <b class="mono">${rg.motor||'—'}</b></span>
       <span>Registro: <b>${rg.fecha||'—'}</b></span>
       <span>Días desde el registro: <b>${daysBetween(rg.fecha||todayISO(), todayISO())}</b></span>
@@ -1008,24 +1126,24 @@ function renderGpsDetail(){
 document.getElementById('btn-gps-back').addEventListener('click', ()=>goto('gps'));
 
 function renderGps(){
-  const activos = gpsRegistros.filter(r=>!gAllDone(r));
-  const completados = gpsRegistros.filter(r=>gAllDone(r));
+  const mv = mesVista();
+  const activos = gpsRegistros.filter(r=>!gAllDone(r) && enVista(r.fecha, true));
+  const completados = gpsRegistros.filter(r=>gAllDone(r) && mesDe((r.et.agendar_cli||{}).fecha || r.fecha)===mv);
   const listosTec = activos.filter(r=>gAvailable(r).some(s=>s.key==='agendar_tec'));
   const porEntrega = activos.filter(r=>gAvailable(r).some(s=>s.key==='agendar_cli'));
-  const mesActual = todayISO().slice(0,7);
-  const completadosMes = completados.filter(r=>((r.et.agendar_cli||{}).fecha||'').slice(0,7)===mesActual);
+  const completadosMes = completados;
 
   document.getElementById('gps-cards').innerHTML = `
     <div class="card amber"><div class="k">En proceso</div><div class="v">${activos.length}</div><div class="d">solicitudes activas</div></div>
     <div class="card blue"><div class="k">Listas para agendar técnico</div><div class="v">${listosTec.length}</div><div class="d">alistadas y facturadas</div></div>
     <div class="card green"><div class="k">Instaladas — agendar entrega</div><div class="v">${porEntrega.length}</div><div class="d">el asesor ya puede agendar al cliente</div></div>
-    <div class="card green"><div class="k">Completadas (mes)</div><div class="v">${completadosMes.length}</div><div class="d">entrega agendada</div></div>
+    <div class="card green"><div class="k">Completadas (${nombreMes(mv)})</div><div class="v">${completadosMes.length}</div><div class="d">entrega agendada</div></div>
   `;
 
   const score = r => gDelay(r) ? 3 : (porEntrega.includes(r) ? 2 : (listosTec.includes(r) ? 1 : 0));
   const ordenados = activos.slice().reverse().sort((a,b)=>score(b)-score(a));
   const list = document.getElementById('gps-list');
-  list.innerHTML = ordenados.length ? ordenados.map(r=>gpsRowHTML(r)).join('') : `<div class="empty">No hay solicitudes activas. Usa "+ Nueva solicitud" para registrar una.</div>`;
+  list.innerHTML = ordenados.length ? ordenados.map(r=>gpsRowHTML(r)).join('') : `<div class="empty">No hay solicitudes activas en ${nombreMes(mv)}. Usa "+ Nueva solicitud" para registrar una.</div>`;
   bindGpsRowEvents(list);
 
   const cw = document.getElementById('gps-completed-wrap');
@@ -1047,6 +1165,7 @@ document.getElementById('btn-nueva-gps').addEventListener('click', ()=>{
   wrap.style.display = abriendo ? 'block' : 'none';
   if(!abriendo) return;
   document.getElementById('g-fecha').value = todayISO();
+  document.getElementById('g-pago').value = '';
   wireMotoColor('g');
 });
 document.getElementById('btn-cancelar-gps').addEventListener('click', ()=>{ document.getElementById('gps-form-wrap').style.display='none'; });
@@ -1058,6 +1177,8 @@ document.getElementById('btn-guardar-gps').addEventListener('click', async ()=>{
   const moto = readMoto('g');
   if(!asesor || !moto){ showToast('Completa al menos asesor y moto.'); return; }
   if(!cedula){ showToast('La cédula del cliente es obligatoria.'); return; }
+  const formaPago = document.getElementById('g-pago').value;
+  if(!formaPago){ showToast('Selecciona la forma de pago: Crédito, Contado o Addi.'); return; }
 
   guardandoGps = true;
   const btn = document.getElementById('btn-guardar-gps');
@@ -1065,7 +1186,7 @@ document.getElementById('btn-guardar-gps').addEventListener('click', async ()=>{
   try{
     const fecha = document.getElementById('g-fecha').value || todayISO();
     const rg = {
-      id: uid(), fecha, asesor, cedula, moto, color: readColor('g'),
+      id: uid(), fecha, asesor, cedula, formaPago, moto, color: readColor('g'),
       motor: document.getElementById('g-motor').value.trim(),
       et: { reg:{done:true, fecha, hora:nowTime()} },
     };
@@ -1073,7 +1194,7 @@ document.getElementById('btn-guardar-gps').addEventListener('click', async ()=>{
     await saveGps();
     showToast('Solicitud de GPS registrada.');
     document.getElementById('gps-form-wrap').style.display = 'none';
-    ['g-cedula','g-motor'].forEach(id=>document.getElementById(id).value='');
+    ['g-cedula','g-motor','g-pago'].forEach(id=>document.getElementById(id).value='');
     renderGps();
   } finally {
     guardandoGps = false;
@@ -1085,15 +1206,17 @@ document.getElementById('btn-informe-gps').addEventListener('click', ()=>{
   const mes = document.getElementById('gps-mes-informe').value || todayISO().slice(0,7);
   const filas = gpsRegistros.filter(r=>(r.fecha||'').slice(0,7)===mes);
   const f = (r,k)=> (r.et && r.et[k] && r.et[k].done) ? r.et[k].fecha : '';
-  const lines = [['Fecha registro','Asesor','Cedula','Moto','Color','# Motor','Llegada PDV','Alistamiento','Facturacion dispositivo','N Factura dispositivo','Agendamiento tecnico','Instalacion','Entrega agendada al cliente','Estado'].join(';')];
+  const lines = [['Fecha registro','Asesor','Cedula','Forma de pago','Moto','Color','# Motor','Llegada PDV','Alistamiento','Facturacion dispositivo','N Factura dispositivo','Agendamiento tecnico','Instalacion','Entrega agendada al cliente','Estado'].join(';')];
   filas.forEach(r=>{
     const estado = gAllDone(r) ? 'Completado' : ('Esperando: ' + gAvailable(r).map(s=>s.nombre).join(' / '));
     lines.push([
-      r.fecha||'', r.asesor||'', r.cedula||'', r.moto||'', r.color||'', r.motor||'',
+      r.fecha||'', r.asesor||'', r.cedula||'', r.formaPago||'', r.moto||'', r.color||'', r.motor||'',
       f(r,'llegada'), f(r,'alistar'), f(r,'facturar'), r.numeroFacturaDispositivo||'',
       f(r,'agendar_tec'), f(r,'instalar'), f(r,'agendar_cli'), estado
     ].map(v=>String(v).replace(/;/g,',')).join(';'));
   });
+  const porPago = fp => filas.filter(r=>r.formaPago===fp).length;
+  lines.push('', `Total GPS del mes;${filas.length}`, `Credito;${porPago('Crédito')}`, `Contado;${porPago('Contado')}`, `Addi;${porPago('Addi')}`);
   descargarCSV(`GPS_${mes}.csv`, lines);
 });
 
@@ -1104,6 +1227,13 @@ document.getElementById('btn-informe-gps').addEventListener('click', ()=>{
   renderVendedorEditor();
   document.getElementById('mc-mes-informe').value = todayISO().slice(0,7);
   document.getElementById('gps-mes-informe').value = todayISO().slice(0,7);
+  document.querySelectorAll('.mes-vista').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      mesElegido = (inp.value && inp.value!==mesHoy()) ? inp.value : null; // volver al mes actual = seguir automático
+      refreshCurrentView();
+    });
+  });
+  syncMesInputs();
   renderDashboard();
 })();
 </script>
