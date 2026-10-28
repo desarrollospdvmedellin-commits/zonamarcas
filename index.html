@@ -379,6 +379,12 @@
         <input type="month" id="gps-mes-informe" style="border:1px solid var(--line);border-radius:7px;padding:9px 10px;font-size:13px;">
         <button class="btn ghost" id="btn-informe-gps">📊 Descargar informe de GPS (Excel)</button>
       </div>
+
+      <div class="section-title">Respaldo</div>
+      <div class="form-card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <button class="btn ghost" id="btn-respaldo">💾 Descargar respaldo completo</button>
+        <span class="soft" style="font-size:12.5px;">Guarda una copia de toda la información (marcación y GPS) en un archivo. Úsalo para recuperar datos si algo se borra.</span>
+      </div>
     </div>
 
   </div>
@@ -504,14 +510,18 @@ const store = {
   }
 };
 
-async function loadData(){
+async function loadData(gen0){
   try{
     const r = await store.get('marcacion_registros');
-    registros = r && r.value ? JSON.parse(r.value) : [];
     const r2 = await store.get('marcacion_vendedores');
-    vendedores = r2 && r2.value ? JSON.parse(r2.value) : DEFAULT_VENDEDORES.slice();
     const r3 = await store.get('gps_registros');
+    // Si alguien guardó mientras se leía, esta lectura ya es vieja: se descarta
+    if(gen0 !== undefined && (gen0 !== genGuardado || hayCambiosPendientes())) return false;
+    registros = r && r.value ? JSON.parse(r.value) : [];
+    vendedores = r2 && r2.value ? JSON.parse(r2.value) : DEFAULT_VENDEDORES.slice();
     gpsRegistros = r3 && r3.value ? JSON.parse(r3.value) : [];
+    ultimoConteo.marcacion_registros = registros.length; ultimoConteo.gps_registros = gpsRegistros.length;
+    respaldoLocal('marcacion_registros', registros); respaldoLocal('gps_registros', gpsRegistros);
     storageDisponible = true;
   }catch(e){
     // No se pudo leer: se bloquea el guardado para no borrar los datos de la hoja
@@ -520,33 +530,61 @@ async function loadData(){
     storageDisponible = false;
   }
   mostrarAvisoStorage(!storageDisponible);
+  return true;
 }
 const MSG_ERR = ()=> storageDisponible===false
   ? 'No hay conexión con Google Sheets. Recarga la página.'
-  : 'No se pudo guardar. Intenta de nuevo en unos segundos.';
+  : 'No se guardó: no se pudo leer la información de Google Sheets. Intenta de nuevo.';
 /* Guardado seguro entre varios usuarios: antes de guardar se lee lo último de Google Sheets
    y solo se aplican los cambios hechos en este equipo (por id). Así nadie borra sin querer
    lo que otro registró mientras tenía la página abierta. */
-const cambios = { marcacion_registros:{upd:new Set(), del:new Set()}, gps_registros:{upd:new Set(), del:new Set()} };
-function marcarCambio(key, id){ cambios[key].del.delete(id); cambios[key].upd.add(id); }
-function marcarBorrado(key, id){ cambios[key].upd.delete(id); cambios[key].del.add(id); }
-function hayCambiosPendientes(){ return Object.values(cambios).some(c=>c.upd.size||c.del.size); }
-async function guardarLista(key, local){
+const cambios = {
+  marcacion_registros:{ nuevos:new Map(), ops:[], del:new Set() },
+  gps_registros:{ nuevos:new Map(), ops:[], del:new Set() },
+};
+let genGuardado = 0;                                    // cambia con cada guardado: invalida lecturas que iban en camino
+const ultimoConteo = { marcacion_registros:0, gps_registros:0 };
+function registrarNuevo(key, item){ cambios[key].nuevos.set(item.id, item); }
+function registrarCambio(key, id, fn){ cambios[key].ops.push({id, fn}); }   // fn = la acción puntual (marcar, completar etapa...)
+function registrarBorrado(key, id){ cambios[key].nuevos.delete(id); cambios[key].del.add(id); }
+function hayCambiosPendientes(){ return Object.values(cambios).some(c=>c.nuevos.size || c.ops.length || c.del.size); }
+/* Lee lo último de Google Sheets y aplica SOLO las acciones de este equipo sobre esa versión.
+   Nunca reemplaza un registro completo con una copia vieja. */
+async function guardarLista(key){
+  genGuardado++;
   const ch = cambios[key];
-  const r = await store.get(key);                 // si falla la lectura, NO se guarda (se lanza error)
-  storageDisponible = true; mostrarAvisoStorage(false);
+  const r = await store.get(key);                     // si la lectura falla, se lanza error y NO se guarda
   const remoto = r && r.value ? JSON.parse(r.value) : [];
-  const locMap = new Map(local.map(x=>[x.id, x]));
-  const res = remoto.filter(x=>!ch.del.has(x.id)).map(x=> (ch.upd.has(x.id) && locMap.has(x.id)) ? locMap.get(x.id) : x);
-  const ids = new Set(res.map(x=>x.id));
-  local.forEach(x=>{ if(ch.upd.has(x.id) && !ids.has(x.id)) res.push(x); });   // nuevos, en el orden local
+  if(!Array.isArray(remoto)) throw new Error('Formato inesperado en Google Sheets');
+  if(!remoto.length && ultimoConteo[key] > 0){        // lectura vacía sospechosa: proteger los datos
+    throw new Error('Lectura vacía de Google Sheets: no se guarda para no borrar la información');
+  }
+  storageDisponible = true; mostrarAvisoStorage(false);
+  const res = remoto.filter(x=>!ch.del.has(x.id));
+  const porId = new Map(res.map(x=>[x.id, x]));
+  ch.ops.forEach(op=>{ const it = porId.get(op.id); if(it) op.fn(it); });
+  ch.nuevos.forEach((it, id)=>{ if(!porId.has(id) && !ch.del.has(id)){ res.push(it); porId.set(id, it); } });
   await store.set(key, JSON.stringify(res));
-  ch.upd.clear(); ch.del.clear();
+  ch.nuevos.clear(); ch.ops = []; ch.del.clear();
+  ultimoConteo[key] = res.length;
+  genGuardado++;
+  respaldoLocal(key, res);
   return res;
 }
-async function saveRegistros(){ try{ registros = await guardarLista('marcacion_registros', registros); }catch(e){ console.error(e); showToast(MSG_ERR()); } }
+/* Copia de respaldo en este equipo (últimas 5 versiones por lista) para poder recuperar información */
+function respaldoLocal(key, lista){
+  try{
+    const k = 'zm_respaldo_' + key;
+    const arr = JSON.parse(localStorage.getItem(k) || '[]');
+    arr.unshift({ t: new Date().toISOString(), n: lista.length, data: lista });
+    localStorage.setItem(k, JSON.stringify(arr.slice(0,5)));
+  }catch(e){ /* sin espacio o bloqueado: se ignora */ }
+}
+async function saveRegistros(){ try{ registros = await guardarLista('marcacion_registros'); return true; }catch(e){ console.error(e); descartarCambios('marcacion_registros'); showToast(MSG_ERR()); return false; } }
 async function saveVendedores(){ try{ await store.set('marcacion_vendedores', JSON.stringify(vendedores)); }catch(e){ showToast(MSG_ERR()); } }
-async function saveGps(){ try{ gpsRegistros = await guardarLista('gps_registros', gpsRegistros); }catch(e){ console.error(e); showToast(MSG_ERR()); } }
+async function saveGps(){ try{ gpsRegistros = await guardarLista('gps_registros'); return true; }catch(e){ console.error(e); descartarCambios('gps_registros'); showToast(MSG_ERR()); return false; } }
+/* Si no se pudo guardar, se descarta el cambio y se vuelve a leer: la pantalla muestra lo que realmente quedó en Sheets */
+function descartarCambios(key){ const c = cambios[key]; c.nuevos.clear(); c.ops = []; c.del.clear(); setTimeout(()=>refrescar(false), 300); }
 
 async function assignNumero(rg){
   try{
@@ -647,9 +685,11 @@ function bindMcRowEvents(scope){
   scope.querySelectorAll('[data-marcar]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const rg = registros.find(x=>x.id===btn.dataset.marcar);
-      rg.marcada = true; rg.fechaMarcada = todayISO();
-      marcarCambio('marcacion_registros', rg.id);
-      await saveRegistros();
+      if(!rg) return;
+      const hoy = todayISO();
+      const fn = x=>{ x.marcada = true; x.fechaMarcada = x.fechaMarcada || hoy; };
+      fn(rg); registrarCambio('marcacion_registros', rg.id, fn);
+      if(!(await saveRegistros())) return;
       showToast('Moto marcada — el asesor ya puede verla lista.');
       refreshCurrentView();
     });
@@ -661,8 +701,8 @@ function bindMcRowEvents(scope){
     btn.addEventListener('click', ()=>{
       askDelete(btn.closest('.actions') || btn.parentElement, async ()=>{
         const rg = registros.find(x=>x.id===btn.dataset.mcQuitar);
-        if(rg){ rg.archivada = true; rg.fechaArchivada = todayISO(); marcarCambio('marcacion_registros', rg.id); }
-        await saveRegistros();
+        if(rg){ const hoy = todayISO(); const fn = x=>{ x.archivada = true; x.fechaArchivada = hoy; }; fn(rg); registrarCambio('marcacion_registros', rg.id, fn); }
+        if(!(await saveRegistros())) return;
         showToast('Moto quitada de la lista — sigue en el historial y el informe.');
         refreshCurrentView();
       }, false, '¿Quitar de la lista de marcadas?', 'Sí, quitar');
@@ -672,8 +712,8 @@ function bindMcRowEvents(scope){
     btn.addEventListener('click', ()=>{
       askDelete(btn.closest('.actions') || btn.parentElement, async ()=>{
         registros = registros.filter(x=>x.id!==btn.dataset.mcDel);
-        marcarBorrado('marcacion_registros', btn.dataset.mcDel);
-        await saveRegistros();
+        registrarBorrado('marcacion_registros', btn.dataset.mcDel);
+        if(!(await saveRegistros())) return;
         showToast('Registro eliminado.');
         refreshCurrentView();
       });
@@ -869,8 +909,8 @@ document.getElementById('btn-guardar-mc').addEventListener('click', async ()=>{
     };
     await assignNumero(rg);
     registros.push(rg);
-    marcarCambio('marcacion_registros', rg.id);
-    await saveRegistros();
+    registrarNuevo('marcacion_registros', rg);
+    if(!(await saveRegistros())) return;
     showToast('Solicitud registrada.');
     document.getElementById('mc-form-wrap').style.display = 'none';
     ['mc-motor','mc-factura','mc-obs'].forEach(id=>document.getElementById(id).value='');
@@ -1000,7 +1040,13 @@ function migrateGps(){
   let changed = false;
   gpsRegistros.forEach(rg=>{
     if(rg.et) return;
-    marcarCambio('gps_registros', rg.id);
+    registrarCambio('gps_registros', rg.id, migrarUno);
+    migrarUno(rg); changed = true;
+  });
+  return changed;
+}
+function migrarUno(rg){
+    if(rg.et) return;
     const f = rg.fecha || todayISO();
     rg.et = { reg:{done:true, fecha:f, hora:''} };
     if(rg.llegada)   rg.et.llegada     = {done:true, fecha:rg.fechaLlegada||f, hora:''};
@@ -1008,9 +1054,6 @@ function migrateGps(){
     if(rg.facturada) rg.et.facturar    = {done:true, fecha:rg.fechaFacturada||f, hora:''};
     if(rg.agendado)  rg.et.agendar_tec = {done:true, fecha:rg.fechaAgendado||f, hora:''};
     if(rg.terminada) rg.et.instalar    = {done:true, fecha:rg.fechaTerminada||f, hora:''};
-    changed = true;
-  });
-  return changed;
 }
 
 function gpsRail(rg){
@@ -1138,11 +1181,12 @@ function renderGpsDetail(){
         if(key==='facturar'){
           const v = document.getElementById('g-fact-input').value.trim();
           if(!v){ showToast('Ingresa el N° de factura antes de completar esta etapa.'); return; }
-          rg.numeroFacturaDispositivo = v;
         }
-        rg.et[key] = {done:true, fecha:todayISO(), hora:nowTime()};
-        marcarCambio('gps_registros', rg.id);
-        await saveGps();
+        const factura = key==='facturar' ? document.getElementById('g-fact-input').value.trim() : null;
+        const rec = {done:true, fecha:todayISO(), hora:nowTime()};
+        const fn = x=>{ x.et = x.et || {}; if(!(x.et[key] && x.et[key].done)) x.et[key] = rec; if(factura!==null) x.numeroFacturaDispositivo = factura; };
+        fn(rg); registrarCambio('gps_registros', rg.id, fn);
+        if(!(await saveGps())) return;
         showToast(key==='agendar_cli' ? 'Proceso completado.' : 'Etapa completada.');
         renderGpsDetail();
       } finally { gpsBusy = false; }
@@ -1151,8 +1195,8 @@ function renderGpsDetail(){
   document.getElementById('btn-gps-del').addEventListener('click', ()=>{
     askDelete(document.getElementById('gps-del-zone'), async ()=>{
       gpsRegistros = gpsRegistros.filter(x=>x.id!==rg.id);
-      marcarBorrado('gps_registros', rg.id);
-      await saveGps();
+      registrarBorrado('gps_registros', rg.id);
+      if(!(await saveGps())) return;
       showToast('Registro eliminado.');
       goto('gps');
     }, true);
@@ -1164,10 +1208,9 @@ function renderGpsDetail(){
       try{
         const key = btn.dataset.gundo;
         if(!gCanUndo(rg,key)) return;
-        delete rg.et[key];
-        if(key==='facturar') rg.numeroFacturaDispositivo = '';
-        marcarCambio('gps_registros', rg.id);
-        await saveGps();
+        const fn = x=>{ if(x.et) delete x.et[key]; if(key==='facturar') x.numeroFacturaDispositivo = ''; };
+        fn(rg); registrarCambio('gps_registros', rg.id, fn);
+        if(!(await saveGps())) return;
         showToast('Etapa reabierta.');
         renderGpsDetail();
       } finally { gpsBusy = false; }
@@ -1242,8 +1285,8 @@ document.getElementById('btn-guardar-gps').addEventListener('click', async ()=>{
       et: { reg:{done:true, fecha, hora:nowTime()} },
     };
     gpsRegistros.push(rg);
-    marcarCambio('gps_registros', rg.id);
-    await saveGps();
+    registrarNuevo('gps_registros', rg);
+    if(!(await saveGps())) return;
     showToast('Solicitud de GPS registrada.');
     document.getElementById('gps-form-wrap').style.display = 'none';
     ['g-cedula','g-motor','g-pago'].forEach(id=>document.getElementById(id).value='');
@@ -1286,7 +1329,8 @@ async function refrescar(manual){
   refrescando = true;
   const btn = document.getElementById('btn-actualizar'); if(btn) btn.classList.add('girando');
   try{
-    await loadData();
+    const aplicada = await loadData(genGuardado);
+    if(!aplicada) return;
     const activa = document.querySelector('.view.active').id.replace('view-','');
     if(activa==='gpsdetalle') renderGpsDetail(); else refreshCurrentView();
     pintarUltimaAct();
@@ -1299,6 +1343,17 @@ document.getElementById('btn-actualizar').addEventListener('click', ()=>refresca
 setInterval(()=>{ if(document.visibilityState==='visible') refrescar(false); }, 60000);
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') refrescar(false); });
 window.addEventListener('pageshow', e=>{ if(e.persisted) refrescar(false); });   // Safari/iPhone al volver atrás
+
+document.getElementById('btn-respaldo').addEventListener('click', ()=>{
+  let locales = {};
+  try{ ['marcacion_registros','gps_registros'].forEach(k=>{ locales[k] = JSON.parse(localStorage.getItem('zm_respaldo_'+k) || '[]'); }); }catch(e){}
+  const data = { generado: new Date().toISOString(), marcacion_registros: registros, gps_registros: gpsRegistros, vendedores, respaldos_de_este_equipo: locales };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob); const a = document.createElement('a');
+  a.href = url; a.download = `Respaldo_ZonaMarcas_${todayISO()}_${nowTime().replace(':','')}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  showToast('Respaldo descargado.');
+});
 
 (async function init(){
   await loadData();
