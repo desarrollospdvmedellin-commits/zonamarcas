@@ -453,6 +453,7 @@ function showToast(msg){
 // ALMACENAMIENTO COMPARTIDO (Google Sheets vía Apps Script)
 // Pega aquí la URL de tu Web App (termina en /exec)
 // ============================================================
+const APP_VERSION = 3;   // el Apps Script rechaza guardados de versiones anteriores (protección contra pérdida de datos)
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwoFm6643EyXFrIJyUEaEXdvcueTGcGX6SnvhHH36Vd-l8cvG6oIvnyIUKHka_k7N4oaQ/exec';
 
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
@@ -485,14 +486,15 @@ async function storageSet(key, value){
     const res = await fetch(SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight CORS
-      body: JSON.stringify({ action: 'set', key, value })
+      body: JSON.stringify({ action: 'set', key, value, version: APP_VERSION })
     });
     const data = await res.json();
-    if(!data || !data.ok) throw new Error((data && data.error) || 'Error al guardar');
+    if(!data || !data.ok){ const err = new Error((data && data.error) || 'Error al guardar'); err.servidor = !!(data && data.error); throw err; }
     return true;
   };
   try{ return await intentar(); }
   catch(e){
+    if(e && e.servidor) throw e;   // rechazo del servidor: no reintentar
     await sleep(800);
     return await intentar();
   }
@@ -580,9 +582,9 @@ function respaldoLocal(key, lista){
     localStorage.setItem(k, JSON.stringify(arr.slice(0,5)));
   }catch(e){ /* sin espacio o bloqueado: se ignora */ }
 }
-async function saveRegistros(){ try{ registros = await guardarLista('marcacion_registros'); return true; }catch(e){ console.error(e); descartarCambios('marcacion_registros'); showToast(MSG_ERR()); return false; } }
+async function saveRegistros(){ try{ registros = await guardarLista('marcacion_registros'); return true; }catch(e){ console.error(e); descartarCambios('marcacion_registros'); showToast(e && e.servidor ? e.message : MSG_ERR()); return false; } }
 async function saveVendedores(){ try{ await store.set('marcacion_vendedores', JSON.stringify(vendedores)); }catch(e){ showToast(MSG_ERR()); } }
-async function saveGps(){ try{ gpsRegistros = await guardarLista('gps_registros'); return true; }catch(e){ console.error(e); descartarCambios('gps_registros'); showToast(MSG_ERR()); return false; } }
+async function saveGps(){ try{ gpsRegistros = await guardarLista('gps_registros'); return true; }catch(e){ console.error(e); descartarCambios('gps_registros'); showToast(e && e.servidor ? e.message : MSG_ERR()); return false; } }
 /* Si no se pudo guardar, se descarta el cambio y se vuelve a leer: la pantalla muestra lo que realmente quedó en Sheets */
 function descartarCambios(key){ const c = cambios[key]; c.nuevos.clear(); c.ops = []; c.del.clear(); setTimeout(()=>refrescar(false), 300); }
 
