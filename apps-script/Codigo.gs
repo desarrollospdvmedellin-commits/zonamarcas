@@ -1,21 +1,28 @@
 /**
  * ZonaMarcas · UbikMe GPS — base de datos en Google Sheets
- * Versión con protección contra pérdida de datos.
+ * Versión 2 del servidor: guardado por acciones (sin pérdida de datos entre varios usuarios).
  *
- * Protecciones:
- *  1. Lectura y escritura con candado: nadie lee mientras otro está guardando (evita lecturas vacías).
- *  2. Solo acepta guardados de la app versión 3 o superior (bloquea equipos con la versión vieja abierta).
- *  3. Rechaza guardados que borren muchos registros de una vez.
- *  4. Antes de cada guardado copia lo que había en la pestaña "respaldos" (últimas 300 copias).
+ * Cómo funciona:
+ *  - La app ya no envía la lista completa: envía solo la acción (registrar, marcar, completar etapa,
+ *    deshacer, eliminar). Este programa la aplica sobre lo último que hay en la hoja, todo dentro
+ *    de un candado, así dos personas que guardan al mismo tiempo no se pisan.
+ *  - Lectura con candado: nunca se entrega un valor a medio escribir.
+ *  - Una sola consulta trae todos los datos (más rápido para todos).
+ *  - Numeración de remisiones sin repetir.
+ *  - Rechaza guardados de páginas desactualizadas y borrados masivos.
+ *  - Copia de respaldo en la pestaña "respaldos" (como máximo una cada 3 minutos por lista; últimas 300).
  */
 const SHEET_NAME = 'datos';
 const BACKUP_SHEET = 'respaldos';
 const CHUNK = 45000;
-const VERSION_MINIMA = 3;
-const MAX_RESPALDOS = 300;
+const SERVIDOR_VERSION = 2;
+const VERSION_MINIMA = 4;                 // la app debe ser versión 4 o superior para guardar
 const LISTAS = ['marcacion_registros', 'gps_registros'];
 const MAX_BORRADOS_POR_GUARDADO = 3;
+const MAX_RESPALDOS = 300;
+const MINUTOS_ENTRE_RESPALDOS = 3;
 
+/* ---------------- Hoja ---------------- */
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(SHEET_NAME);
@@ -59,6 +66,24 @@ function trocear_(value) {
   return chunks;
 }
 
+function leer_(sh, key) {
+  const row = findRow_(sh, key);
+  return row === -1 ? null : readValue_(sh, row);
+}
+
+function escribir_(sh, key, value) {
+  let row = findRow_(sh, key);
+  if (row === -1) {
+    row = sh.getLastRow() + 1;
+    sh.getRange(row, 1).setValue(key);
+  }
+  const chunks = trocear_(value);
+  const lastCol = sh.getLastColumn();
+  if (lastCol > 1) sh.getRange(row, 2, 1, lastCol - 1).clearContent();
+  sh.getRange(row, 2, 1, chunks.length).setNumberFormat('@').setValues([chunks]);
+  SpreadsheetApp.flush();
+}
+
 function contar_(texto) {
   try {
     const a = JSON.parse(texto);
@@ -68,8 +93,13 @@ function contar_(texto) {
   }
 }
 
+/* ---------------- Respaldos ---------------- */
 function respaldar_(key, valorAnterior) {
   if (!valorAnterior) return;
+  const props = PropertiesService.getScriptProperties();
+  const prop = 'ultimo_respaldo_' + key;
+  const ultimo = Number(props.getProperty(prop) || 0);
+  if (Date.now() - ultimo < MINUTOS_ENTRE_RESPALDOS * 60000) return;
   const sh = getBackupSheet_();
   const chunks = trocear_(valorAnterior);
   const row = sh.getLastRow() + 1;
@@ -78,73 +108,141 @@ function respaldar_(key, valorAnterior) {
   sh.getRange(row, 4, 1, chunks.length).setNumberFormat('@').setValues([chunks]);
   const sobran = sh.getLastRow() - 1 - MAX_RESPALDOS;
   if (sobran > 0) sh.deleteRows(2, sobran);
+  props.setProperty(prop, String(Date.now()));
 }
 
+/* ---------------- Acciones sobre un registro ---------------- */
+function getPath_(obj, path) {
+  const ks = path.split('.');
+  let o = obj;
+  for (let i = 0; i < ks.length; i++) {
+    if (o === null || typeof o !== 'object') return undefined;
+    o = o[ks[i]];
+  }
+  return o;
+}
+function setPath_(obj, path, val) {
+  const ks = path.split('.');
+  let o = obj;
+  for (let i = 0; i < ks.length - 1; i++) {
+    if (o[ks[i]] === null || typeof o[ks[i]] !== 'object') o[ks[i]] = {};
+    o = o[ks[i]];
+  }
+  o[ks[ks.length - 1]] = val;
+}
+function unsetPath_(obj, path) {
+  const ks = path.split('.');
+  let o = obj;
+  for (let i = 0; i < ks.length - 1; i++) {
+    if (o === null || typeof o !== 'object') return;
+    o = o[ks[i]];
+  }
+  if (o && typeof o === 'object') delete o[ks[ks.length - 1]];
+}
+/* cambio = { id, setSiFalta:{ruta:valor}, set:{ruta:valor}, unset:[ruta] } */
+function aplicarCambio_(it, c) {
+  if (c.setSiFalta) Object.keys(c.setSiFalta).forEach(function (p) {
+    const v = getPath_(it, p);
+    if (v === undefined || v === null || v === '') setPath_(it, p, c.setSiFalta[p]);
+  });
+  if (c.set) Object.keys(c.set).forEach(function (p) { setPath_(it, p, c.set[p]); });
+  if (c.unset) c.unset.forEach(function (p) { unsetPath_(it, p); });
+}
+
+/* ---------------- Respuestas ---------------- */
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
+function rechazo_(msg) {
+  return json_({ ok: false, rechazo: true, error: msg });
+}
 
+/* ---------------- Lectura ---------------- */
 function doGet(e) {
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(20000);   // espera si alguien está guardando: nunca devuelve un valor a medio escribir
-    const key = e.parameter.key;
-    if (!key) return json_({ ok: false, error: 'Falta la clave' });
+    const p = e.parameter || {};
+    if (p.action === 'info') return json_({ ok: true, servidor: SERVIDOR_VERSION });
+    lock.waitLock(30000);
     const sh = getSheet_();
-    const row = findRow_(sh, key);
-    return json_({ ok: true, value: row === -1 ? null : readValue_(sh, row) });
+    if (p.action === 'getall') {
+      const keys = String(p.keys || '').split(',').filter(String);
+      const values = {};
+      keys.forEach(function (k) { values[k] = leer_(sh, k); });
+      return json_({ ok: true, values: values });
+    }
+    const key = p.key;
+    if (!key) return json_({ ok: false, error: 'Falta la clave' });
+    return json_({ ok: true, value: leer_(sh, key) });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
-    lock.releaseLock();
+    try { lock.releaseLock(); } catch (x) {}
   }
 }
 
+/* ---------------- Escritura ---------------- */
 function doPost(e) {
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(20000);
     const body = JSON.parse(e.postData.contents);
+    const action = String(body.action || 'set');
     const key = String(body.key || '');
-    const value = String(body.value == null ? '' : body.value);
     if (!key) return json_({ ok: false, error: 'Falta la clave' });
-
-    // 2. Bloquear versiones viejas de la app
     if (Number(body.version || 0) < VERSION_MINIMA) {
-      return json_({ ok: false, error: 'Esta página está desactualizada y no puede guardar. Ciérrala y vuelve a abrirla.' });
+      return rechazo_('Esta página está desactualizada y no puede guardar. Ciérrala y vuelve a abrirla.');
     }
-
+    lock.waitLock(30000);
     const sh = getSheet_();
-    let row = findRow_(sh, key);
-    const anterior = row === -1 ? '' : readValue_(sh, row);
 
-    // 3. Bloquear borrados masivos en las listas
-    if (LISTAS.indexOf(key) >= 0) {
-      const nNuevo = contar_(value);
-      if (nNuevo === null) return json_({ ok: false, error: 'Datos inválidos: no se guardó.' });
-      const nAnterior = anterior ? contar_(anterior) : null;
-      if (nAnterior !== null && nNuevo < nAnterior - MAX_BORRADOS_POR_GUARDADO) {
-        return json_({ ok: false, error: 'Se bloqueó un guardado que iba a borrar ' + (nAnterior - nNuevo) + ' registros. Recarga la página.' });
+    // --- Acciones sobre una lista (registrar, marcar, completar, deshacer, eliminar) ---
+    if (action === 'ops') {
+      if (LISTAS.indexOf(key) < 0) return rechazo_('Lista desconocida.');
+      const borrar = body.borrar || [];
+      if (borrar.length > MAX_BORRADOS_POR_GUARDADO) {
+        return rechazo_('Se bloqueó un guardado que iba a borrar ' + borrar.length + ' registros.');
       }
+      const anterior = leer_(sh, key) || '';
+      let lista = [];
+      if (anterior) {
+        try { lista = JSON.parse(anterior); } catch (x) { return json_({ ok: false, error: 'La hoja tiene datos dañados; no se guardó.' }); }
+        if (!Array.isArray(lista)) return json_({ ok: false, error: 'La hoja tiene datos dañados; no se guardó.' });
+      }
+      const borrarSet = {};
+      borrar.forEach(function (id) { borrarSet[id] = true; });
+      lista = lista.filter(function (x) { return !borrarSet[x.id]; });
+      const porId = {};
+      lista.forEach(function (x) { porId[x.id] = x; });
+      (body.cambios || []).forEach(function (c) { if (porId[c.id]) aplicarCambio_(porId[c.id], c); });
+      (body.nuevos || []).forEach(function (it) {
+        if (it && it.id && !porId[it.id] && !borrarSet[it.id]) { lista.push(it); porId[it.id] = it; }
+      });
+      const nuevo = JSON.stringify(lista);
+      respaldar_(key, anterior);
+      escribir_(sh, key, nuevo);
+      return json_({ ok: true, value: nuevo });
     }
 
-    // 4. Copia de respaldo de lo que había
-    respaldar_(key, anterior);
-
-    if (row === -1) {
-      row = sh.getLastRow() + 1;
-      sh.getRange(row, 1).setValue(key);
+    // --- Consecutivo (número de remisión) sin repetir ---
+    if (action === 'incr') {
+      const actual = parseInt(leer_(sh, key) || '', 10);
+      const siguiente = (isNaN(actual) ? Number(body.inicio || 0) : actual) + 1;
+      escribir_(sh, key, String(siguiente));
+      return json_({ ok: true, value: siguiente });
     }
-    const chunks = trocear_(value);
-    const lastCol = sh.getLastColumn();
-    if (lastCol > 1) sh.getRange(row, 2, 1, lastCol - 1).clearContent();
-    sh.getRange(row, 2, 1, chunks.length).setNumberFormat('@').setValues([chunks]);
-    SpreadsheetApp.flush();
+
+    // --- Valor suelto (lista de vendedores, etc.) ---
+    if (LISTAS.indexOf(key) >= 0) {
+      return rechazo_('Esta página está desactualizada y no puede guardar. Ciérrala y vuelve a abrirla.');
+    }
+    const value = String(body.value == null ? '' : body.value);
+    respaldar_(key, leer_(sh, key) || '');
+    escribir_(sh, key, value);
     return json_({ ok: true });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
-    lock.releaseLock();
+    try { lock.releaseLock(); } catch (x) {}
   }
 }

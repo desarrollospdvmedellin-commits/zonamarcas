@@ -453,7 +453,7 @@ function showToast(msg){
 // ALMACENAMIENTO COMPARTIDO (Google Sheets vía Apps Script)
 // Pega aquí la URL de tu Web App (termina en /exec)
 // ============================================================
-const APP_VERSION = 3;   // el Apps Script rechaza guardados de versiones anteriores (protección contra pérdida de datos)
+const APP_VERSION = 4;   // el Apps Script rechaza guardados de versiones anteriores (protección contra pérdida de datos)
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwoFm6643EyXFrIJyUEaEXdvcueTGcGX6SnvhHH36Vd-l8cvG6oIvnyIUKHka_k7N4oaQ/exec';
 
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
@@ -481,23 +481,55 @@ async function storageGet(key){
   console.error('storage get failed', key, ultimoError);
   throw new Error('No se pudo leer "'+key+'" de Google Sheets');
 }
-async function storageSet(key, value){
-  const intentar = async () => {
-    const res = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight CORS
-      body: JSON.stringify({ action: 'set', key, value, version: APP_VERSION })
-    });
-    const data = await res.json();
-    if(!data || !data.ok){ const err = new Error((data && data.error) || 'Error al guardar'); err.servidor = !!(data && data.error); throw err; }
-    return true;
-  };
-  try{ return await intentar(); }
-  catch(e){
-    if(e && e.servidor) throw e;   // rechazo del servidor: no reintentar
-    await sleep(800);
-    return await intentar();
+/* POST con reintentos: si Google está ocupado o no responde se reintenta;
+   si el servidor RECHAZA a propósito (página vieja, borrado masivo) no se reintenta. */
+async function postServidor(body){
+  let ultimo;
+  for(let intento=0; intento<3; intento++){
+    try{
+      const res = await fetch(SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita preflight CORS
+        body: JSON.stringify(Object.assign({ version: APP_VERSION }, body))
+      });
+      const data = await res.json();
+      if(data && data.ok) return data;
+      const err = new Error((data && data.error) || 'Error al guardar');
+      err.servidor = !!(data && (data.rechazo || (!servidorV2 && data.error)));
+      throw err;
+    }catch(e){
+      ultimo = e;
+      if(e && e.servidor) throw e;
+      await sleep(900*(intento+1));
+    }
   }
+  throw ultimo;
+}
+async function storageSet(key, value){
+  await postServidor({ action: 'set', key, value });
+  return true;
+}
+/* ¿El Apps Script ya es la versión 2 (guardado por acciones)? */
+let servidorV2 = null;
+async function detectarServidor(){
+  try{
+    const res = await fetch(`${SCRIPT_URL}?action=info&_t=${Date.now()}`, {cache:'no-store'});
+    const data = await res.json();
+    servidorV2 = !!(data && data.ok && Number(data.servidor) >= 2);
+  }catch(e){ servidorV2 = false; }
+}
+async function leerTodo(keys){
+  let ultimo;
+  for(let intento=0; intento<3; intento++){
+    try{
+      const res = await fetch(`${SCRIPT_URL}?action=getall&keys=${encodeURIComponent(keys.join(','))}&_t=${Date.now()}`, {cache:'no-store'});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const data = await res.json();
+      if(!data || !data.ok || !data.values) throw new Error((data && data.error) || 'Respuesta inválida');
+      return data.values;
+    }catch(e){ ultimo = e; await sleep(700*(intento+1)); }
+  }
+  throw ultimo;
 }
 
 const store = {
@@ -514,9 +546,17 @@ const store = {
 
 async function loadData(gen0){
   try{
-    const r = await store.get('marcacion_registros');
-    const r2 = await store.get('marcacion_vendedores');
-    const r3 = await store.get('gps_registros');
+    if(servidorV2 === null) await detectarServidor();
+    let r, r2, r3;
+    if(servidorV2){
+      const v = await leerTodo(['marcacion_registros','marcacion_vendedores','gps_registros']);
+      const w = x => (x===null || x===undefined || x==='') ? null : {value:x};
+      r = w(v.marcacion_registros); r2 = w(v.marcacion_vendedores); r3 = w(v.gps_registros);
+    } else {
+      r = await store.get('marcacion_registros');
+      r2 = await store.get('marcacion_vendedores');
+      r3 = await store.get('gps_registros');
+    }
     // Si alguien guardó mientras se leía, esta lectura ya es vieja: se descarta
     if(gen0 !== undefined && (gen0 !== genGuardado || hayCambiosPendientes())) return false;
     registros = r && r.value ? JSON.parse(r.value) : [];
@@ -536,7 +576,7 @@ async function loadData(gen0){
 }
 const MSG_ERR = ()=> storageDisponible===false
   ? 'No hay conexión con Google Sheets. Recarga la página.'
-  : 'No se guardó: no se pudo leer la información de Google Sheets. Intenta de nuevo.';
+  : 'No se guardó: Google Sheets no respondió. Intenta de nuevo en unos segundos.';
 /* Guardado seguro entre varios usuarios: antes de guardar se lee lo último de Google Sheets
    y solo se aplican los cambios hechos en este equipo (por id). Así nadie borra sin querer
    lo que otro registró mientras tenía la página abierta. */
@@ -547,7 +587,18 @@ const cambios = {
 let genGuardado = 0;                                    // cambia con cada guardado: invalida lecturas que iban en camino
 const ultimoConteo = { marcacion_registros:0, gps_registros:0 };
 function registrarNuevo(key, item){ cambios[key].nuevos.set(item.id, item); }
-function registrarCambio(key, id, fn){ cambios[key].ops.push({id, fn}); }   // fn = la acción puntual (marcar, completar etapa...)
+function registrarCambio(key, id, patch){ cambios[key].ops.push(Object.assign({id}, patch)); }   // patch = la acción puntual
+/* Aplica una acción a un registro (misma lógica que el Apps Script):
+   { setSiFalta:{ruta:valor}, set:{ruta:valor}, unset:[ruta] } — ruta con puntos, p. ej. 'et.llegada' */
+function getRuta(o, ruta){ return ruta.split('.').reduce((a,k)=> (a && typeof a==='object') ? a[k] : undefined, o); }
+function setRuta(o, ruta, v){ const ks = ruta.split('.'); let x = o; for(let i=0;i<ks.length-1;i++){ if(!x[ks[i]] || typeof x[ks[i]]!=='object') x[ks[i]] = {}; x = x[ks[i]]; } x[ks[ks.length-1]] = v; }
+function unsetRuta(o, ruta){ const ks = ruta.split('.'); let x = o; for(let i=0;i<ks.length-1;i++){ if(!x || typeof x!=='object') return; x = x[ks[i]]; } if(x && typeof x==='object') delete x[ks[ks.length-1]]; }
+function aplicarPatch(it, c){
+  if(c.setSiFalta) Object.keys(c.setSiFalta).forEach(p=>{ const v = getRuta(it,p); if(v===undefined || v===null || v==='') setRuta(it, p, JSON.parse(JSON.stringify(c.setSiFalta[p]))); });
+  if(c.set) Object.keys(c.set).forEach(p=> setRuta(it, p, JSON.parse(JSON.stringify(c.set[p]))));
+  if(c.unset) c.unset.forEach(p=> unsetRuta(it, p));
+}
+function accion(key, rg, patch){ aplicarPatch(rg, patch); registrarCambio(key, rg.id, patch); }
 function registrarBorrado(key, id){ cambios[key].nuevos.delete(id); cambios[key].del.add(id); }
 function hayCambiosPendientes(){ return Object.values(cambios).some(c=>c.nuevos.size || c.ops.length || c.del.size); }
 /* Lee lo último de Google Sheets y aplica SOLO las acciones de este equipo sobre esa versión.
@@ -555,18 +606,32 @@ function hayCambiosPendientes(){ return Object.values(cambios).some(c=>c.nuevos.
 async function guardarLista(key){
   genGuardado++;
   const ch = cambios[key];
-  const r = await store.get(key);                     // si la lectura falla, se lanza error y NO se guarda
-  const remoto = r && r.value ? JSON.parse(r.value) : [];
-  if(!Array.isArray(remoto)) throw new Error('Formato inesperado en Google Sheets');
-  if(!remoto.length && ultimoConteo[key] > 0){        // lectura vacía sospechosa: proteger los datos
-    throw new Error('Lectura vacía de Google Sheets: no se guarda para no borrar la información');
+  if(servidorV2 === null) await detectarServidor();
+  let res;
+  if(servidorV2){
+    // Google aplica las acciones dentro de su candado: dos guardados simultáneos no se pisan
+    const data = await postServidor({
+      action: 'ops', key,
+      nuevos: [...ch.nuevos.values()],
+      borrar: [...ch.del],
+      cambios: ch.ops,
+    });
+    res = JSON.parse(data.value || '[]');
+  } else {
+    // Servidor anterior: leer lo último, aplicar las acciones y guardar la lista
+    const r = await store.get(key);
+    const remoto = r && r.value ? JSON.parse(r.value) : [];
+    if(!Array.isArray(remoto)) throw new Error('Formato inesperado en Google Sheets');
+    if(!remoto.length && ultimoConteo[key] > 0){
+      throw new Error('Lectura vacía de Google Sheets: no se guarda para no borrar la información');
+    }
+    res = remoto.filter(x=>!ch.del.has(x.id));
+    const porId = new Map(res.map(x=>[x.id, x]));
+    ch.ops.forEach(op=>{ const it = porId.get(op.id); if(it) aplicarPatch(it, op); });
+    ch.nuevos.forEach((it, id)=>{ if(!porId.has(id) && !ch.del.has(id)){ res.push(it); porId.set(id, it); } });
+    await store.set(key, JSON.stringify(res));
   }
   storageDisponible = true; mostrarAvisoStorage(false);
-  const res = remoto.filter(x=>!ch.del.has(x.id));
-  const porId = new Map(res.map(x=>[x.id, x]));
-  ch.ops.forEach(op=>{ const it = porId.get(op.id); if(it) op.fn(it); });
-  ch.nuevos.forEach((it, id)=>{ if(!porId.has(id) && !ch.del.has(id)){ res.push(it); porId.set(id, it); } });
-  await store.set(key, JSON.stringify(res));
   ch.nuevos.clear(); ch.ops = []; ch.del.clear();
   ultimoConteo[key] = res.length;
   genGuardado++;
@@ -590,6 +655,7 @@ function descartarCambios(key){ const c = cambios[key]; c.nuevos.clear(); c.ops 
 
 async function assignNumero(rg){
   try{
+    if(servidorV2){ const d = await postServidor({ action:'incr', key:'marcacion_counter', inicio:9000 }); rg.numero = d.value; return; }
     const r = await store.get('marcacion_counter');
     const current = r && r.value ? parseInt(r.value,10) : 9000;
     const next = current + 1;
@@ -689,8 +755,7 @@ function bindMcRowEvents(scope){
       const rg = registros.find(x=>x.id===btn.dataset.marcar);
       if(!rg) return;
       const hoy = todayISO();
-      const fn = x=>{ x.marcada = true; x.fechaMarcada = x.fechaMarcada || hoy; };
-      fn(rg); registrarCambio('marcacion_registros', rg.id, fn);
+      accion('marcacion_registros', rg, { set:{marcada:true}, setSiFalta:{fechaMarcada:hoy} });
       if(!(await saveRegistros())) return;
       showToast('Moto marcada — el asesor ya puede verla lista.');
       refreshCurrentView();
@@ -703,7 +768,7 @@ function bindMcRowEvents(scope){
     btn.addEventListener('click', ()=>{
       askDelete(btn.closest('.actions') || btn.parentElement, async ()=>{
         const rg = registros.find(x=>x.id===btn.dataset.mcQuitar);
-        if(rg){ const hoy = todayISO(); const fn = x=>{ x.archivada = true; x.fechaArchivada = hoy; }; fn(rg); registrarCambio('marcacion_registros', rg.id, fn); }
+        if(rg){ accion('marcacion_registros', rg, { set:{archivada:true, fechaArchivada:todayISO()} }); }
         if(!(await saveRegistros())) return;
         showToast('Moto quitada de la lista — sigue en el historial y el informe.');
         refreshCurrentView();
@@ -1042,8 +1107,9 @@ function migrateGps(){
   let changed = false;
   gpsRegistros.forEach(rg=>{
     if(rg.et) return;
-    registrarCambio('gps_registros', rg.id, migrarUno);
-    migrarUno(rg); changed = true;
+    const copia = JSON.parse(JSON.stringify(rg)); migrarUno(copia);
+    accion('gps_registros', rg, { setSiFalta:{ et: copia.et } });
+    changed = true;
   });
   return changed;
 }
@@ -1186,8 +1252,9 @@ function renderGpsDetail(){
         }
         const factura = key==='facturar' ? document.getElementById('g-fact-input').value.trim() : null;
         const rec = {done:true, fecha:todayISO(), hora:nowTime()};
-        const fn = x=>{ x.et = x.et || {}; if(!(x.et[key] && x.et[key].done)) x.et[key] = rec; if(factura!==null) x.numeroFacturaDispositivo = factura; };
-        fn(rg); registrarCambio('gps_registros', rg.id, fn);
+        const patch = { setSiFalta:{ ['et.'+key]: rec } };
+        if(factura!==null) patch.set = { numeroFacturaDispositivo: factura };
+        accion('gps_registros', rg, patch);
         if(!(await saveGps())) return;
         showToast(key==='agendar_cli' ? 'Proceso completado.' : 'Etapa completada.');
         renderGpsDetail();
@@ -1210,8 +1277,9 @@ function renderGpsDetail(){
       try{
         const key = btn.dataset.gundo;
         if(!gCanUndo(rg,key)) return;
-        const fn = x=>{ if(x.et) delete x.et[key]; if(key==='facturar') x.numeroFacturaDispositivo = ''; };
-        fn(rg); registrarCambio('gps_registros', rg.id, fn);
+        const patch = { unset:['et.'+key] };
+        if(key==='facturar') patch.set = { numeroFacturaDispositivo:'' };
+        accion('gps_registros', rg, patch);
         if(!(await saveGps())) return;
         showToast('Etapa reabierta.');
         renderGpsDetail();
